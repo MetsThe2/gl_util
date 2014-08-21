@@ -212,14 +212,18 @@ void buf_orphan_i(size_t num, GLenum usage)
 
 int buf_put_f(const GLfloat *data, size_t start, size_t num)
 {
-    num *= sizeof(GLfloat);
+    glBufferSubData(GL_ARRAY_BUFFER,
+                    start * sizeof(GLfloat), num * sizeof(GLfloat), data);
+    /* Mapping is very slow with a Geforce GTX 560 and OpenGL 4.4. If it's much
+    faster on other setups, use the commented out implementation. */
+    /* num *= sizeof(GLfloat);
 
     GLfloat *p = glMapBufferRange(GL_ARRAY_BUFFER,
                                   start * sizeof(GLfloat), num, MAP_FAST_WRITE);
     if (!p) return 1;
     memcpy(p, data, num);
 
-    glUnmapBuffer(GL_ARRAY_BUFFER);
+    glUnmapBuffer(GL_ARRAY_BUFFER); */
     return 0;
 }
 int buf_put_f2(const glf2 *data, size_t start, size_t num)
@@ -248,6 +252,8 @@ int buf_put_i(const BufIndex *data, size_t start, size_t num)
     return 0;
 }
 
+// Because 'array_of_my_struct_type[index] = {.field1 = foo, .field2 = bar} doesn't
+// work in C.
 clr3 set_clr3(clr3 *c, GLfloat r, GLfloat g, GLfloat b)
 {
     c->r = r;
@@ -382,7 +388,7 @@ case (n): \
 */
 }
 
-#if 1 // So the macros can be folded in a code editor (Code::Blocks, Notepad++, etc).
+#if 1 // So the macros can be folded in a code editor (e.g. Code::Blocks).
 #define CONCAT(a, b) CONCAT2(a, b)
 #define CONCAT2(a, b) a ## b
 
@@ -423,17 +429,18 @@ case (n): \
         IF(n, norm[i].x = ccw_dir.x; norm[i].y = -ccw_dir.y;) \
         /* The IF's condition should be !(CIRCLE_BUF_SIZE % 2) here. */ \
     } while (++i IF(1, < CIRCLE_BUF_SIZE));
-#endif // 1 (always true)
+#endif // 1
 
 static void gen_circle(glf2 pos, GLfloat rad, glf2 *vert)
 {
     GEN_CIRCLE(0);
 }
-
 static void gen_circle_with_norm(glf2 pos, GLfloat rad, glf2 *vert, glf2 *norm)
 {
     GEN_CIRCLE(1);
 }
+
+#undef GEN_CIRCLE
 
 void buf_gen_circles(const glf2 *pos, const GLfloat *rad, unsigned num, GLenum usage)
 {
@@ -584,7 +591,9 @@ Cam2 cam2_pin(Cam2 cam, glf2 pin, GLfloat tightness, glf2 level_size)
 
 Cam2 cam2_zoom(Cam2 cam, glf2 pin, glf2 level_size)
 {
-    if (!last_scroll_dir) return cam;
+    if (!last_scroll_dir || (last_scroll_dir < 0 && cam.rad <= CAM_ZOOM_STEP)) {
+        return cam;
+    }
 
     const GLfloat zoom = CAM_ZOOM_STEP * (GLfloat)last_scroll_dir;
     const GLfloat diam = 2.0 * (cam.rad -= zoom);
@@ -646,41 +655,15 @@ glf2 rand_glf2(glf2 max)
     return r;
 }
 
-static void dots_init_bufs(DebugDots *dots)
+void bind_dots_attrib_loc(GLuint prog)
 {
-    glGenVertexArrays(1, &dots->vao);
-    glBindVertexArray(dots->vao);
-
-    glGenBuffers(1, &dots->model_buf);
-
-    glBindBuffer(GL_ARRAY_BUFFER, dots->model_buf);
-    buf_orphan_f2(dots->model_size, GL_STATIC_DRAW);
-
-    const glf2 circle_pos = {.x = 0.0, .y = 0.0};
-    const GLfloat circle_rad = 1.0;
-    buf_gen_circles(&circle_pos, &circle_rad, 1, GL_STATIC_DRAW);
-
-    vert_attrib_ptr(loc_vert_pos, 2, 0);
-
-    glGenBuffers(1, &dots->pos_buf);
-    glBindBuffer(GL_ARRAY_BUFFER, dots->pos_buf);
-    buf_orphan_f2(dots->num, GL_STREAM_DRAW);
-    vert_attrib_ptr(loc_inst_pos, 2, 1);
-
-    glGenBuffers(1, &dots->rad_buf);
-    glBindBuffer(GL_ARRAY_BUFFER, dots->rad_buf);
-    buf_orphan_f(dots->num, GL_STREAM_DRAW);
-    vert_attrib_ptr(loc_inst_rad, 1, 1);
-
-    glGenBuffers(1, &dots->clr_buf);
-    glBindBuffer(GL_ARRAY_BUFFER, dots->clr_buf);
-    buf_orphan_f3(dots->num, GL_STREAM_DRAW);
-    vert_attrib_ptr(loc_inst_clr, 3, 1);
-
-    glBindVertexArray(0);
+    BIND_ATTR_LOC(prog, vert_pos);
+    BIND_ATTR_LOC(prog, inst_pos);
+    BIND_ATTR_LOC(prog, inst_rad);
+    BIND_ATTR_LOC(prog, inst_clr);
 }
 
-DebugDots dots_init(unsigned num)
+DebugDots dots_alloc(unsigned num)
 {
     DebugDots dots;
 
@@ -696,8 +679,6 @@ DebugDots dots_init(unsigned num)
     if (!dots.clr) goto null_clr;
 
     dots.num = num;
-    dots.model_size = CIRCLE_BUF_SIZE;
-    dots_init_bufs(&dots);
 
     goto no_errors;
 null_clr:
@@ -716,20 +697,52 @@ int dots_are_null(const DebugDots *dots)
     return dots->pos == NULL;
 }
 
-void dots_upload(DebugDots dots)
+void dots_init_bufs(DebugDots *dots)
 {
-    glBindBuffer(GL_ARRAY_BUFFER, dots.pos_buf);
-    buf_put_f2(dots.pos, 0, dots.num);
+    glGenVertexArrays(1, &dots->vao);
+    glBindVertexArray(dots->vao);
 
-    glBindBuffer(GL_ARRAY_BUFFER, dots.rad_buf);
-    buf_put_f( dots.rad, 0, dots.num);
+    glGenBuffers(1, &dots->model_buf);
 
-    glBindBuffer(GL_ARRAY_BUFFER, dots.clr_buf);
-    buf_put_clr3(dots.clr, 0, dots.num);
+    glBindBuffer(GL_ARRAY_BUFFER, dots->model_buf);
+    dots->model_size = CIRCLE_BUF_SIZE;
+    buf_orphan_f2(dots->model_size, GL_STATIC_DRAW);
+    const glf2 circle_pos = {.x = 0.0, .y = 0.0};
+    const GLfloat circle_rad = 1.0;
+    buf_gen_circles(&circle_pos, &circle_rad, 1, GL_STATIC_DRAW);
+    vert_attrib_ptr(loc_vert_pos, 2, 0);
+
+    glGenBuffers(1, &dots->pos_buf);
+    glBindBuffer(GL_ARRAY_BUFFER, dots->pos_buf);
+    buf_orphan_f2(dots->num, GL_STREAM_DRAW);
+    vert_attrib_ptr(loc_inst_pos, 2, 1);
+
+    glGenBuffers(1, &dots->rad_buf);
+    glBindBuffer(GL_ARRAY_BUFFER, dots->rad_buf);
+    buf_orphan_f(dots->num, GL_STATIC_DRAW);
+    buf_put_f(dots->rad, 0, dots->num);
+    vert_attrib_ptr(loc_inst_rad, 1, 1);
+
+    glGenBuffers(1, &dots->clr_buf);
+    glBindBuffer(GL_ARRAY_BUFFER, dots->clr_buf);
+    buf_orphan_f3(dots->num, GL_STATIC_DRAW);
+    buf_put_clr3(dots->clr, 0, dots->num);
+    vert_attrib_ptr(loc_inst_clr, 3, 1);
+
+    glBindVertexArray(0);
 }
 
-void dots_draw(const DebugDots *dots)
+void dots_upload(const DebugDots *dots)
 {
+    glBindBuffer(GL_ARRAY_BUFFER, dots->pos_buf);
+    // Not orphaning is more efficient (at least for small numbers of dots).
+    // buf_orphan_f2(dots->num, GL_STREAM_DRAW);
+    buf_put_f2(dots->pos, 0, dots->num);
+}
+
+void dots_draw(const DebugDots *dots, GLuint dots_prog)
+{
+    glUseProgram(dots_prog);
     glBindVertexArray(dots->vao);
     // Change TRIANGLE_STRIP to TRIANGLE_FAN to draw a porcupine.
     glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, dots->model_size, dots->num);
@@ -750,13 +763,5 @@ void dots_del(DebugDots *dots)
 
     free(dots->clr);
     dots->clr = NULL;
-}
-
-void bind_dots_attrib_loc(GLuint prog)
-{
-    BIND_ATTR_LOC(prog, vert_pos);
-    BIND_ATTR_LOC(prog, inst_pos);
-    BIND_ATTR_LOC(prog, inst_rad);
-    BIND_ATTR_LOC(prog, inst_clr);
 }
 #define last_line

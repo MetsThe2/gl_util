@@ -138,10 +138,15 @@ typedef struct Cam2 {
 Cam2 cam2_init(GLfloat pos_x, GLfloat pos_y, GLfloat rad,
                const GLchar *uni_block_name, GLuint *progs, unsigned prog_num);
 int cam2_is_null(const Cam2 *cam);
+void cam2_del(Cam2 *cam);
+
 Cam2 cam2_pin(Cam2 cam, glf2 pin, GLfloat tightness, glf2 level_size);
 Cam2 cam2_zoom(Cam2 cam, glf2 pin, glf2 level_size);
+
+void cam2_upload(Cam2 cam);
+
+// Pins, zooms and uploads camera.
 void cam2_adjust(Cam2 *cam, glf2 pin, GLfloat tightness, glf2 level_size);
-void cam2_del(Cam2 *cam);
 
 typedef struct Cam3 {
     glf3 pos;
@@ -176,10 +181,13 @@ typedef struct DebugDots {
 // Call this before linking dots_prog (made with dots.vert and vary.frag).
 void bind_dots_attrib_loc(GLuint prog);
 
-DebugDots dots_init(unsigned num);
-int dots_are_null(const DebugDots *dots);
-void dots_upload(DebugDots dots);
-void dots_draw(const DebugDots *dots);
+DebugDots dots_alloc(unsigned num); // Allocate pos, rad and clr arrays to initialize.
+int dots_are_null(const DebugDots *dots); // Returns whether *dots is invalid.
+// Creates buffers, uploads static data (unit circle model, colors, radiuses).
+void dots_init_bufs(DebugDots *dots);
 void dots_del(DebugDots *dots);
+
+void dots_upload(const DebugDots *dots);
+void dots_draw(const DebugDots *dots, GLuint dots_prog);
 
 #endif // GL_UTIL_H_INCLUDED
