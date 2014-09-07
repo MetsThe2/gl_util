@@ -24,6 +24,7 @@ inline glf2 mul_glf2(glf2 a, glf2 b) {
     glf2 r = {.x = a.x * b.x, .y = a.y * b.y};
     return r;
 }
+inline glf2 div_glf2(glf2 a, glf2 b) { return (glf2){a.x / b.x, a.y / b.y}; }
 
 inline glf2 scale_glf2(glf2 v, GLfloat s) {
     v.x *= s;
@@ -34,22 +35,22 @@ inline glf2 scale_glf2(glf2 v, GLfloat s) {
 inline GLfloat dot_glf2(glf2 a, glf2 b) {
     return (a.x * b.x) + (a.y * b.y);
 }
-inline  GLfloat sqr_abs_glf2(glf2 v) {
+inline  GLfloat sqr_len_glf2(glf2 v) {
     return dot_glf2(v, v);
 }
 inline GLfloat sqr_dist_glf2(glf2 a, glf2 b) {
-    return sqr_abs_glf2(sub_glf2(a, b));
+    return sqr_len_glf2(sub_glf2(a, b));
 }
 
 inline glf2 unit_glf2(glf2 v) {
-    return scale_glf2(v, 1.f / sqrt(sqr_abs_glf2(v)));
+    return scale_glf2(v, 1.f / sqrt(sqr_len_glf2(v)));
 }
 
 // a and b are the endpoints of the line.
 inline glf2 line_nearest(glf2 a, glf2 b, glf2 v) {
     const glf2 ab = sub_glf2(b, a); // ab = a -> b
     const glf2 av = sub_glf2(v, a); // av = a -> v
-    const GLfloat s = dot_glf2(av, ab) / sqr_abs_glf2(ab); // s = (av . ab) / |ab|**2
+    const GLfloat s = dot_glf2(av, ab) / sqr_len_glf2(ab); // s = (av . ab) / |ab|**2
     if (s <= 0.f) return a;
     if (s >= 1.f) return b;
     return add_glf2(a, scale_glf2(ab, s)); // a + (ab * s)

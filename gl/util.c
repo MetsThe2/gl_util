@@ -6,6 +6,7 @@
 
 #include "attr_loc.h"
 #include "input.h"
+#include "f2.h"
 #include "cam3.h"
 
 static void error_callback(int error, const char *description)
@@ -13,31 +14,45 @@ static void error_callback(int error, const char *description)
     fputs(description, stderr);
 }
 
+static void adjust_viewport(GLFWwindow *window, int width, int height)
+{
+    glViewport(0, 0, (GLsizei)width, (GLsizei)height);
+}
+
 static void resize_callback(GLFWwindow *window, int width, int height)
 {
-    glViewport(0, 0, width, height);
+    adjust_viewport(window, width, height);
     cam3_on_window_resize(width, height);
 }
-/*
-static int init_glew(void)
+
+static void cursor_pos_callback(GLFWwindow *window, double x_d, double y_d)
 {
-    GLenum err = glewInit();
-    if (err != GLEW_OK) {
-        fprintf(stderr, "Error: %s\n", glewGetErrorString(err));
-        return 1;
-    } else {
-        printf("Status: Using GLEW %s\n", glewGetString(GLEW_VERSION));
-    }
-    return 0;
+    int width_i, height_i;
+    glfwGetWindowSize(window, &width_i, &height_i);
+    const glf2 size = {width_i, height_i};
+
+    const glf2 center = scale_glf2(size, 0.5f);
+    const glf2 cursor = {x_d, size.y - y_d};
+
+    cam3_rot(cursor, center, size);
+    glfwSetCursorPos(window, center.x, center.y);
 }
-*/
+
+static void key_callback(GLFWwindow *window,
+                         int key, int scancode, int action, int mods)
+{
+    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
+        glfwSetWindowShouldClose(window, GL_TRUE);
+    }
+}
+
 void basic_cleanup(GLFWwindow *window)
 {
     glfwDestroyWindow(window);
     glfwTerminate();
 }
 
-GLFWwindow * basic_init(int width, int height, const char *title)
+GLFWwindow * basic_init(int width, int height, const char *title, int use_cam3)
 {
     glfwSetErrorCallback(&error_callback);
     if (!glfwInit()) return NULL;
@@ -61,7 +76,13 @@ GLFWwindow * basic_init(int width, int height, const char *title)
     glGetIntegerv(GL_MAX_VERTEX_ATTRIBS, &max_loc_num);
     if (shader_attrib_loc_num <= max_loc_num) {
         glfwSetScrollCallback(window, &scroll_callback);
-        glfwSetWindowSizeCallback(window, &resize_callback);
+        glfwSetKeyCallback(window, &key_callback);
+        if (use_cam3) {
+            glfwSetCursorPosCallback(window, &cursor_pos_callback);
+            glfwSetWindowSizeCallback(window, &resize_callback);
+        } else {
+            glfwSetWindowSizeCallback(window, &adjust_viewport);
+        }
         return window;
     }
     fputs("Too many shader attribute locations used.\n", stderr);
@@ -71,17 +92,13 @@ load_failed:
     return NULL;
 }
 
-int pause_or_exit(GLFWwindow *window)
+void maybe_complete_pause(GLFWwindow *window)
 {
-    /* Complete pause except for exit key. In a finished app, there's usually
-    still things to update and render when paused, but this function is good
-    for initial prototyping / debugging. */
-    if (IS_KEY(ESCAPE)) return 1; // 1 == exit
+    /* In a finished app, there's usually still things to update and render when
+    paused, but this function is good for initial prototyping / debugging. */
     if (toggle_pause(window)) {
-        do {
+        while (!(glfwWindowShouldClose(window) || toggle_pause(window))) {
             glfwWaitEvents();
-            if (IS_KEY(ESCAPE)) return 1;
-        } while (!toggle_pause(window));
+        }
     }
-    return 0; // 0 == !exit == keep playing
 }

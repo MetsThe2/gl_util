@@ -2,7 +2,7 @@
 
 #include "funcs.h"
 #include "buf.h"
-#include "buf_gen.h"
+#include "gen.h"
 #include "attr_loc.h"
 #include "dots.h"
 

@@ -31,15 +31,15 @@ inline GLfloat dot_glf3(glf3 a, glf3 b) {
     return (a.x * b.x) + (a.y * b.y) + (a.z * b.z);
 }
 
-inline GLfloat sqr_abs_glf3(glf3 v) {
+inline GLfloat sqr_len_glf3(glf3 v) {
     return dot_glf3(v, v);
 }
 inline GLfloat sqr_dist_glf3(glf3 a, glf3 b) {
-    return sqr_abs_glf3(sub_glf3(b, a));
+    return sqr_len_glf3(sub_glf3(b, a));
 }
 
 inline glf3 unit_glf3(glf3 v) {
-    return scale_glf3(v, 1.f / sqrt(sqr_abs_glf3(v)));
+    return scale_glf3(v, 1.f / sqrt(sqr_len_glf3(v)));
 }
 
 #endif // F3_H_INCLUDED

@@ -4,14 +4,16 @@
 #include <string.h>
 
 #include "funcs.h"
-#include "../pp_sak.h" // ARRAY_LEN
+#include "../pp_sak.h"   // ARRAY_LEN
+#include "f2.h"
+#include "../math_def.h" // M_INV_SQRT_2, cos, sin
 #include "input.h"
 #include "buf.h"
 #include "bind_index.h"
 #include "cam3.h"
 
 // DEFAULT_FOV = 1 / tan(rad_from_deg(a)), where 0 < a < 180, and usually 30 < a < 60.
-#define DEFAULT_FOV 1.8f
+#define DEFAULT_FOV 1.5f
 
 // Indices into camera matrix and what is located at them.
 #define SCALE_X 0  // Scale the x components of camera space coordinates by this;
@@ -32,8 +34,9 @@ void cam3_fov(Cam3 *cam, GLfloat fov)
 static void reset_zoom_dir_pos(Cam3 *cam)
 {
     cam->pos = (glf3){0.f, 0.f, 0.f};
-    cam->dir = (glf3){1.f, 0.f, 0.f};
-    cam->mat[PLANE_D] = -1.f;
+    cam->hdir = (glf2){0.f, -1.f}; // Straight forward
+    cam->vdir = (glf2){1.f,  0.f}; // Halfway between straight up and straight down
+    cam->mat[PLANE_D] = -1.f;      // Default zoom
 }
 
 void cam3_reset(Cam3 *cam)
@@ -43,14 +46,14 @@ void cam3_reset(Cam3 *cam)
 }
 
 static Cam3 cam3_init_uni_buf(const GLchar *uni_block_name,
-                              GLuint *progs, unsigned prog_num)
+                              const GLuint *progs, unsigned prog_num)
 {
     assert(prog_num > 0);
 
     Cam3 cam;
 
     GLuint block_index;
-    int i = prog_num - 1;
+    unsigned i = prog_num - 1;
     /* Since prog_num is always at least one, there's no need to check if
     i >= 0 before the first iteration. Using a do-while instead of a for loop
     also gets rid of a compiler warning (with GCC 4.8.1 and all warnings enabled)
@@ -62,7 +65,7 @@ static Cam3 cam3_init_uni_buf(const GLchar *uni_block_name,
             return cam;
         }
         glUniformBlockBinding(progs[i], block_index, cam3_bind_index);
-    } while (--i >= 0);
+    } while (--i < prog_num);
 
     glGenBuffers(1, &cam.uni_buf);
     glBindBufferBase(GL_UNIFORM_BUFFER, cam3_bind_index, cam.uni_buf);
@@ -77,7 +80,7 @@ static Cam3 cam3_init_uni_buf(const GLchar *uni_block_name,
     GLint uni_num;
     glGetActiveUniformBlockiv(progs[0], block_index,
                               GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS, &uni_num);
-    assert(uni_num == 2); // cam_mat and cam_pos
+    assert(uni_num == 1); // cam_mat
 
     GLint uni_indices[uni_num];
     glGetActiveUniformBlockiv(progs[0], block_index,
@@ -91,13 +94,12 @@ static Cam3 cam3_init_uni_buf(const GLchar *uni_block_name,
     glGetActiveUniformsiv(progs[0], ARRAY_LEN(uint_indices), uint_indices,
                           GL_UNIFORM_OFFSET, uni_offsets);
     cam.mat_offset = uni_offsets[0];
-    cam.pos_offset = uni_offsets[1];
 
     return cam;
 }
 
 Cam3 cam3_init(glf2 window_size, GLfloat z_near, GLfloat z_far,
-               const GLchar *uni_block_name, GLuint *progs, unsigned prog_num)
+               const GLchar *uni_block_name, const GLuint *progs, unsigned prog_num)
 {
     Cam3 cam = cam3_init_uni_buf(uni_block_name, progs, prog_num);
     if (cam3_is_null(&cam)) return cam;
@@ -117,16 +119,17 @@ Cam3 cam3_init(glf2 window_size, GLfloat z_near, GLfloat z_far,
     return cam;
 }
 
-static Cam3 *callback_cam = NULL;
+static Cam3 *cb_cam = NULL;
 void set_callback_cam3(Cam3 *cam)
 {
-    callback_cam = cam;
+    cb_cam = cam;
 }
 
 void cam3_on_window_resize(int width, int height)
 {
+    // Replace with assert(cb_cam && "cam3_on_window_resize has been...")?
     static int warned = 0;
-    if (!(callback_cam || warned)) {
+    if (!(cb_cam || warned)) {
         fputs("Warning: the callback cam3_on_window_resize has been called without "
               "having a callback cam set. This can result in an incorrect aspect "
               "ratio.\n", stderr);
@@ -134,7 +137,7 @@ void cam3_on_window_resize(int width, int height)
         return;
     } // Reciprocal of aspect ratio
     const GLfloat rec_aspect_ratio = ((GLfloat)height) / (GLfloat)width;
-    callback_cam->mat[SCALE_X] = callback_cam->mat[SCALE_Y] * rec_aspect_ratio;
+    cb_cam->mat[SCALE_X] = cb_cam->mat[SCALE_Y] * rec_aspect_ratio;
 }
 
 #define ZOOM_STEP 10.f
@@ -152,11 +155,61 @@ void cam3_zoom(Cam3 *cam, double dt)
     }
 }
 
-static void mat_mul(GLfloat *a, GLfloat *b, GLfloat *r, unsigned n)
+#define HVEL    6.f
+#define VVEL    4.f
+#define FWD_VEL 8.f
+void cam3_move(Cam3 *cam, double dt, int hkey, int vkey, int fwd_key)
+{
+    cam->pos.y += VVEL * dt * (GLfloat)vkey;
+
+    GLfloat fwd_offset, hoffset;
+    if (fwd_key) {
+        if (hkey) {
+            fwd_offset = M_INV_SQRT_2 * FWD_VEL * dt * (GLfloat)fwd_key;
+            hoffset    = M_INV_SQRT_2 * HVEL    * dt * (GLfloat)hkey;
+            cam->pos.x -= cam->hdir.x * fwd_offset;
+            cam->pos.z -= cam->hdir.y * fwd_offset;
+            cam->pos.x += cam->hdir.y * hoffset;
+            cam->pos.z -= cam->hdir.x * hoffset;
+        } else {
+            fwd_offset = FWD_VEL * dt * (GLfloat)fwd_key;
+            cam->pos.x -= cam->hdir.x * fwd_offset;
+            cam->pos.z -= cam->hdir.y * fwd_offset;
+        }
+    } else if (hkey) {
+        hoffset = HVEL * dt * (GLfloat)hkey;
+        cam->pos.x += cam->hdir.y * hoffset;
+        cam->pos.z -= cam->hdir.x * hoffset;
+    }
+}
+
+#define ROT_VEL 1.f
+void cam3_rot(glf2 cursor_pos, glf2 window_center, glf2 window_size)
+{
+    assert(cb_cam && "cam3_rot was called before set_callback_cam3.");
+
+    const glf2 d = sub_glf2(cursor_pos, window_center);
+    const glf2 a = scale_glf2(div_glf2(d, window_size), DEFAULT_FOV * ROT_VEL);
+
+    cb_cam->hdir = rot_glf2(cb_cam->hdir, cos(a.x), sin(a.x));
+    cb_cam->vdir = rot_glf2(cb_cam->vdir, cos(a.y), sin(a.y));
+}
+
+void cam3_key_rot(Cam3 *cam, int hrot, int vrot, double dt)
+{
+    if (!(hrot || vrot)) return; // Profile with / without the branch.
+
+    const GLfloat ang = (2.f * ROT_VEL) * dt;
+    const GLfloat c = cos(ang), s = sin(ang);
+
+    cam->hdir = rot_glf2(cam->hdir, c, s * (GLfloat)hrot);
+    cam->vdir = rot_glf2(cam->vdir, c, s * (GLfloat)vrot);
+}
+
+static void mat_mul(GLfloat *r, const GLfloat *a, const GLfloat *b, unsigned n)
 {
 #define column(i) (i * n)
 #define row(j) j
-    assert(n > 0);
     for (unsigned i = 0; i < n; ++i) {
         for (unsigned j = 0; j < n; ++j) {
             const unsigned i_j = column(i) + row(j);
@@ -170,56 +223,71 @@ static void mat_mul(GLfloat *a, GLfloat *b, GLfloat *r, unsigned n)
 #undef row
 }
 
-static void rot_mat(GLfloat *m, GLfloat x, GLfloat y, GLfloat z, GLfloat c, GLfloat s)
+static void rot_mat4(GLfloat *r, GLfloat x, GLfloat y, GLfloat z, GLfloat c, GLfloat s)
 {
     const GLfloat qx = x * x;
-    m[0] = qx + c - (qx * c);
+    r[0] = qx + c - (qx * c);
     const GLfloat ic = 1.f - c;
     const GLfloat icxy = ic * x * y;
     const GLfloat zs = z * s;
-    m[1] = icxy + zs;
+    r[1] = icxy + zs;
     const GLfloat icxz = ic * x * z;
     const GLfloat ys = y * s;
-    m[2] = icxz - ys;
-    m[3] = 0.f;
+    r[2] = icxz - ys;
+    r[3] = 0.f;
 
-    m[4] = icxy - zs;
+    r[4] = icxy - zs;
     const GLfloat qy = y * y;
-    m[5] = qy + c - (qy * c);
+    r[5] = qy + c - (qy * c);
     const GLfloat icyz = ic * y * z;
     const GLfloat xs = x * s;
-    m[6] = icyz + xs;
-    m[7] = 0.f;
+    r[6] = icyz + xs;
+    r[7] = 0.f;
 
-    m[8] = icxz + ys;
-    m[9] = icyz - xs;
+    r[8] = icxz + ys;
+    r[9] = icyz - xs;
     const GLfloat qz = z * z;
-    m[10] = qz + c - (qz * c);
-    m[11] = 0.f;
+    r[10] = qz + c - (qz * c);
+    r[11] = 0.f;
 
-    m[12] = m[13] = m[14] = 0.f;
-    m[15] = 1.f;
+    r[12] = r[13] = r[14] = 0.f;
+    r[15] = 1.f;
 }
 
 static void id_mat(GLfloat *r, unsigned n)
 {
-    memset(r, 0, n * n);
-    for (unsigned i = 0; i < n; ++i) r[i * n + i] = 1.f;
+    memset(r, 0, n * n * sizeof(*r));
+    for (unsigned i = 0; i < n; ++i) r[i * (n + 1)] = 1.f;
+}
+
+static void trans_mat4(GLfloat *r, glf3 offset)
+{
+    id_mat(r, 4);
+    r[12] = -offset.x;
+    r[13] = -offset.y;
+    r[14] = -offset.z;
 }
 
 void cam3_upload(Cam3 *cam)
 {
-    static GLfloat tmpa[16], tmpb[16], tmpc[16];
-    rot_mat(tmpa, 0.f,        1.f, 0.f, cam->dir.x, cam->dir.z); // Horizontal
-    rot_mat(tmpb, cam->dir.x, 0.f, 0.f, 1.f,        cam->dir.y); // Vertical
-    mat_mul(tmpa, tmpb, tmpc, 4);     // All rotations
-    mat_mul(cam->mat, tmpc, tmpa, 4); // Combined projection and rotation matrix
-    for (unsigned i = 0; i < 0 * ARRAY_LEN(tmpa); ++i) {
-        printf("%u %f %f\n", i, cam->mat[i], tmpa[i]);
-    }
+    GLfloat vrot[16];
+    rot_mat4(vrot, -cam->hdir.y, 0.f, cam->hdir.x, cam->vdir.x, cam->vdir.y);
+
+    GLfloat hrot[16];
+    rot_mat4(hrot, 0.f, 1.f, 0.f, cam->hdir.y, -cam->hdir.x);
+
+    GLfloat trans[16];
+    trans_mat4(trans, cam->pos);
+
+    GLfloat trans_vrot[16];
+    mat_mul(trans_vrot, vrot, trans, 4);
+    GLfloat trans_rot[16];
+    mat_mul(trans_rot, hrot, trans_vrot, 4);
+    GLfloat up[16];
+    mat_mul(up, cam->mat, trans_rot, 4);
+
     glBindBuffer(GL_UNIFORM_BUFFER, cam->uni_buf);
-    glBufferSubData(GL_UNIFORM_BUFFER, cam->pos_offset, sizeof(cam->pos), &cam->pos);
-    glBufferSubData(GL_UNIFORM_BUFFER, cam->mat_offset, sizeof(tmpa), tmpa);
+    glBufferSubData(GL_UNIFORM_BUFFER, cam->mat_offset, sizeof(up), up);
 }
 
 void cam3_del(Cam3 *cam)

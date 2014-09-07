@@ -2,9 +2,7 @@
 #include "f2_type.h"
 #include "f3_type.h"
 #include "clr3_type.h"
-
-#define BUF_INDEX_TYPE GL_UNSIGNED_SHORT
-typedef GLushort BufIndex; // Make sure the typedef and the define match.
+#include "buf_index_type.h"
 
 #define DEL_BUF(b) do { glDeleteBuffers(1, &(b)); (b) = 0; } while (0)
 
