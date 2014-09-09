@@ -119,8 +119,8 @@ static void gen_pyramid_index(BufIndex *bi)
 
 #define UNIT3(a, b, c) \
     vert[v++] = (glf3){pos.x a size.x, pos.y b size.y, pos.z c size.z}
-// pos.c o size.c = pos.c + ( o 1.f * size.c), where s is operator '-' or '+' and c
-// is some component.
+// pos.c o size.c = pos.c + ( o 1.f * size.c), where o is operator '-' or '+' and
+// c is some component.
 
 static void gen_cuboid_vert(glf3 *vert, glf3 pos, glf3 size)
 {
