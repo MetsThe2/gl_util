@@ -43,7 +43,7 @@
         vert[i].x = vert_x; \
         vert[i].y = pos.y - rad_y; \
         IF(n, norm[i].x = ccw_dir.x; norm[i].y = -ccw_dir.y;) \
-        /* The IF's condition should be !(CIRCLE_BUF_SIZE % 2) here. */ \
+        /* The IF's condition should be !(CIRCLE_BUF_SIZE % 2). */ \
     } while (++i IF(1, < CIRCLE_BUF_SIZE));
 #endif // 1
 
